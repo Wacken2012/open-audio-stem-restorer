@@ -199,6 +199,19 @@ Größe & CPU‑Support:
 
 Lizenzhinweise: PySide6/Qt wird dynamisch verwendet (LGPLv3). Bitte legen Sie bei Distribution `LICENSE`, `THIRD_PARTY_LICENSES.md` sowie relevante Upstream‑Lizenztexte bei. Für ffmpeg gilt: je nach Build ist LGPL oder GPL maßgeblich. Wenn Sie ffmpeg bündeln (BUNDLE_FFMPEG=1), stellen Sie sicher, dass der verwendete Build zur gewünschten Weitergabe passt (für LGPL: ohne GPL‑only Komponenten). Das Skript legt dafür eine `usr/licenses/NOTICE-FFMPEG.txt` im AppDir an; ergänzen Sie ggf. die vollständigen Lizenztexte.
 
+### Nachinstallation nicht gebündelter Pakete (Overlay)
+Das AppImage unterstützt eine Benutzer‑Overlay‑Installation zusätzlicher Python‑Pakete, ohne das AppImage selbst zu ändern. Verwenden Sie den mitgelieferten Helfer:
+
+```bash
+# Beispiel: AudioSR nachinstallieren
+./AudioRestorer-<version>-<arch>.AppImage --appimage-extract-and-run audio-restorer-pip audiosr torchvision
+
+# oder (AppImage gemountet im Hintergrund von Desktop) einfach:
+audio-restorer-pip audiosr torchvision
+```
+
+Die Pakete landen unter `${XDG_DATA_HOME:-$HOME/.local/share}/open-audio-stem-restorer/site-packages` und werden beim Start automatisch via PYTHONPATH verwendet. Hinweis: Manche Pakete erfordern bestimmte Python/Numpy‑Versionen. AudioSR benötigt i.d.R. Python 3.10/3.11 mit `numpy<=1.23.x`. Falls die Installation fehlschlägt, prüfen Sie kompatible Versionen oder verwenden Sie die offline‑gebündelte Alternative ohne AudioSR.
+
 ## Tests / Qualitätssicherung
 Schneller Längeninvarianz-Test (stellt sicher, dass Export/Verarbeitung die Länge nicht verändert):
 

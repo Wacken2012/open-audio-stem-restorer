@@ -159,11 +159,30 @@ export XDG_CACHE_HOME="$APPUSR/cache"
 export MPLCONFIGDIR="$APPUSR/cache/mpl"
 # Make sure our usr/bin is preferred (ffmpeg, etc.)
 export PATH="$APPUSR/bin:$PATH"
-# Keep source and site-packages discoverable
+# User overlay for additional packages (installed via audio-restorer-pip)
+OVERLAY_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/open-audio-stem-restorer/site-packages"
+if [[ -d "$OVERLAY_DEFAULT" ]]; then
+  export PYTHONPATH="$OVERLAY_DEFAULT:$PYTHONPATH"
+fi
+# Keep bundled source discoverable
 export PYTHONPATH="$APPUSR:$PYTHONPATH"
 exec "$PY" "$APPUSR/run.py" "$@"
 SH
 chmod +x "$APPDIR/usr/bin/audio-restorer"
+
+# Helper to install extra Python packages into a writable overlay
+cat > "$APPDIR/usr/bin/audio-restorer-pip" <<'SH'
+#!/bin/bash
+set -euo pipefail
+HERE="$(dirname "$(readlink -f "$0")")"
+APPUSR="$(cd "$HERE/.." && pwd)"
+PY="$APPUSR/python/bin/python"
+OVERLAY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/open-audio-stem-restorer/site-packages"
+mkdir -p "$OVERLAY_DIR"
+echo "[overlay] Installing to: $OVERLAY_DIR" >&2
+exec "$PY" -m pip install --no-warn-script-location --upgrade --target "$OVERLAY_DIR" "$@"
+SH
+chmod +x "$APPDIR/usr/bin/audio-restorer-pip"
 
 msg "Create desktop entry"
 cat > "$APPDIR/usr/share/applications/audio-restorer.desktop" <<'DESK'
@@ -182,10 +201,18 @@ cp "$APPDIR/usr/share/applications/audio-restorer.desktop" "$APPDIR/audio-restor
 msg "Create AppRun"
 cat > "$APPDIR/AppRun" <<'AR'
 #!/bin/bash
+set -euo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
 export PYTHONPATH="$HERE/usr/lib:$PYTHONPATH"
 # Ensure bundled tools like ffmpeg are preferred
 export PATH="$HERE/usr/bin:$PATH"
+
+# Support subcommand to install extra packages into user overlay
+if [[ "${1-}" == "audio-restorer-pip" ]]; then
+  shift
+  exec "$HERE/usr/bin/audio-restorer-pip" "$@"
+fi
+
 exec "$HERE/usr/bin/audio-restorer" "$@"
 AR
 chmod +x "$APPDIR/AppRun"
