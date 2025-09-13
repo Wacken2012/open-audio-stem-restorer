@@ -16,16 +16,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QSettings
 from PySide6.QtGui import QIcon, QPalette
 import sys
-import soundfile as sf
 import numpy as np
+import soundfile as sf
 
 from ..separation.interface import list_backends, get_backend
 from ..restoration.pipeline import restore_pipeline
 
 
 class Worker(QObject):
-    progress = Signal(int, str)  # percent, message
-    finished = Signal(np.ndarray, dict)
+    progress = Signal(int, str)
+    finished = Signal(object, object)  # (audio array, stems dict)
     error = Signal(str)
 
     def __init__(
@@ -34,15 +34,15 @@ class Worker(QObject):
         sr: int,
         backend_name: str,
         eq: str,
-        include_names: list[str],
+        include_names: list,
         denoise_strength: float,
         declick_strength: float,
+        *,
+        decrackle_strength: float = 0.0,
         declip_strength: float = 0.0,
         transient_strength: float = 0.0,
         codec_artifact_strength: float = 0.0,
-        model_name: str | None = None,
         air_strength: float = 0.0,
-        decrackle_strength: float = 0.0,
         process_per_stem: bool = False,
         widen_amount: float = 0.0,
         loudness_target_lufs: float = -16.0,
@@ -54,41 +54,66 @@ class Worker(QObject):
         gen_mode: str = "full",
         gen_mix: float = 0.0,
         gen_target_sr: int = 48000,
-    ):
+        model_name: str | None = None,
+        debug_log: bool = False,
+    ) -> None:
         super().__init__()
-        self.audio = audio
-        self.sr = sr
-        self.backend_name = backend_name
-        self.eq = eq
-        self.include_names = include_names
-        self.denoise_strength = denoise_strength
-        self.declick_strength = declick_strength
-        self.decrackle_strength = decrackle_strength
-        self.declip_strength = declip_strength
-        self.transient_strength = transient_strength
-        self.codec_artifact_strength = codec_artifact_strength
+        self.audio = audio.astype(np.float32)
+        self.sr = int(sr)
+        self.backend_name = str(backend_name)
         self.model_name = model_name
-        self.air_strength = air_strength
-        self.process_per_stem = process_per_stem
-        self.widen_amount = widen_amount
-        self.loudness_target_lufs = loudness_target_lufs
-        self.loudness_smooth = loudness_smooth
-        self.clarity_strength = clarity_strength
-        self.wowflutter_strength = wowflutter_strength
-        self.wowflutter_engine = wowflutter_engine
-        self.gen_engine = gen_engine
-        self.gen_mode = gen_mode
+        self.eq = str(eq)
+        self.include_names = list(include_names)
+        self.denoise_strength = float(denoise_strength)
+        self.declick_strength = float(declick_strength)
+        self.decrackle_strength = float(decrackle_strength)
+        self.declip_strength = float(declip_strength)
+        self.transient_strength = float(transient_strength)
+        self.codec_artifact_strength = float(codec_artifact_strength)
+        self.air_strength = float(air_strength)
+        self.process_per_stem = bool(process_per_stem)
+        self.widen_amount = float(widen_amount)
+        self.loudness_target_lufs = float(loudness_target_lufs)
+        self.loudness_smooth = float(loudness_smooth)
+        self.clarity_strength = float(clarity_strength)
+        self.wowflutter_strength = float(wowflutter_strength)
+        self.wowflutter_engine = str(wowflutter_engine)
+        self.gen_engine = str(gen_engine)
+        self.gen_mode = str(gen_mode)
         self.gen_mix = float(gen_mix)
         self.gen_target_sr = int(gen_target_sr)
         self._cancel = False
+        self.debug_log = bool(debug_log)
+        self._log_path: str | None = None
 
-    def cancel(self):
+        if self.debug_log:
+            try:
+                from pathlib import Path
+                root = Path(__file__).resolve().parents[3]
+                (root / "work").mkdir(parents=True, exist_ok=True)
+                self._log_path = str((root / "work" / "debug.log").resolve())
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write("\n=== New session ===\n")
+            except Exception:
+                self._log_path = None
+
+    def _log(self, msg: str) -> None:
+        if not self.debug_log or not self._log_path:
+            return
+        try:
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(str(msg).rstrip("\n") + "\n")
+        except Exception:
+            pass
+
+    def cancel(self) -> None:
         self._cancel = True
 
-    def run(self):
+    def run(self) -> None:
         try:
             if self._cancel:
                 return
+            self._log(f"input: sr={self.sr}, len={len(self.audio)}")
             self.progress.emit(5, f"Trenne Stems mit {self.backend_name}…")
             backend = get_backend(self.backend_name)
             if self.model_name and hasattr(backend, "model_name"):
@@ -100,16 +125,42 @@ class Worker(QObject):
             if sep is None:
                 raise RuntimeError("Ausgewähltes Backend unterstützt 'separate' nicht.")
             stems = sep(self.audio, self.sr)
+            try:
+                self._log("stems lens: " + ", ".join(f"{k}:{len(v)}" for k, v in stems.items()))
+            except Exception:
+                pass
+
+            # Align stems to input length
+            try:
+                n_ref = len(self.audio)
+                def _match_len(y: np.ndarray, n: int) -> np.ndarray:
+                    if y is None:
+                        return y
+                    y = np.asarray(y, dtype=np.float32)
+                    if len(y) == n:
+                        return y
+                    if len(y) < 2:
+                        return np.resize(y, (n,)).astype(np.float32)
+                    t_old = np.linspace(0.0, 1.0, num=len(y), endpoint=False, dtype=np.float64)
+                    t_new = np.linspace(0.0, 1.0, num=n, endpoint=False, dtype=np.float64)
+                    return np.interp(t_new, t_old, y.astype(np.float64)).astype(np.float32)
+                stems = {k: _match_len(v, n_ref) for k, v in stems.items()}
+                try:
+                    self._log("stems aligned: " + ", ".join(f"{k}:{len(v)}" for k, v in stems.items()))
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
             if self._cancel:
                 return
             self.progress.emit(30, "Restauriere…")
 
-            def on_prog(p, msg):
+            def on_prog(p: int, msg: str) -> None:
                 p2 = int(30 + 0.65 * p)
                 self.progress.emit(p2, msg)
 
-            def is_canceled():
+            def is_canceled() -> bool:
                 return self._cancel
 
             out = restore_pipeline(
@@ -139,6 +190,23 @@ class Worker(QObject):
                 gen_target_sr=self.gen_target_sr,
             )
 
+            # Ensure final output length matches original audio length (defensive)
+            try:
+                n_ref = len(self.audio)
+                if out.ndim == 1 and len(out) != n_ref:
+                    t_old = np.linspace(0.0, 1.0, num=len(out), endpoint=False)
+                    t_new = np.linspace(0.0, 1.0, num=n_ref, endpoint=False)
+                    out = np.interp(t_new, t_old, out.astype(np.float32)).astype(np.float32)
+                elif out.ndim == 2 and out.shape[0] != n_ref:
+                    N = out.shape[0]
+                    t_old = np.linspace(0.0, 1.0, num=N, endpoint=False)
+                    t_new = np.linspace(0.0, 1.0, num=n_ref, endpoint=False)
+                    L = np.interp(t_new, t_old, out[:, 0].astype(np.float32))
+                    R = np.interp(t_new, t_old, out[:, 1].astype(np.float32))
+                    out = np.stack([L, R], axis=1).astype(np.float32)
+            except Exception:
+                pass
+
             if self._cancel:
                 return
             self.progress.emit(95, "Abschließen…")
@@ -163,11 +231,11 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-        self.audio_path = None
-        self.sr = 44100
-        self.audio = None
-        self.worker = None
-        self.worker_thread = None
+        self.audio_path: str | None = None
+        self.sr: int = 44100
+        self.audio: np.ndarray | None = None
+        self.worker: Worker | None = None
+        self.worker_thread: QThread | None = None
         self.settings = QSettings("AudioRestorer", "AudioRestorer")
 
         vbox = QVBoxLayout()
@@ -377,6 +445,10 @@ class MainWindow(QWidget):
         self.cb_theme = QComboBox()
         self.cb_theme.addItems(["System", "Light", "Dark"])
         misc_row.addWidget(self.cb_theme)
+        # Debug log toggle
+        self.cb_debug = QCheckBox("Debug-Log")
+        self.cb_debug.setChecked(False)
+        misc_row.addWidget(self.cb_debug)
         self.btn_about = QPushButton("Über…")
         self.btn_about.clicked.connect(self.show_about)
         misc_row.addWidget(self.btn_about)
@@ -389,7 +461,7 @@ class MainWindow(QWidget):
         self.cb_save_stems.setChecked(False)
         self.btn_pick_dir = QPushButton("Ordner wählen…")
         self.btn_pick_dir.setEnabled(False)
-        self.stems_dir = None
+        self.stems_dir: str | None = None
 
         def on_cb_save_changed(state):
             self.btn_pick_dir.setEnabled(self.cb_save_stems.isChecked())
@@ -470,6 +542,7 @@ class MainWindow(QWidget):
             self.btn_cancel.setToolTip("Verarbeitung abbrechen")
             self.prog.setToolTip("Verarbeitungsfortschritt")
             self.cb_theme.setToolTip("Darstellung: System (Standard), Light oder Dark Palette")
+            self.cb_debug.setToolTip("Schreibt SR/Längen-Infos in work/debug.log für Fehlersuche")
             self.btn_about.setToolTip("Info über Version, Lizenz und Bibliotheken")
         except Exception:
             pass
@@ -555,6 +628,7 @@ class MainWindow(QWidget):
             gen_mode=gen_mode,
             gen_mix=gen_mix,
             gen_target_sr=gen_target_sr,
+            debug_log=self.cb_debug.isChecked(),
         )
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
@@ -585,6 +659,18 @@ class MainWindow(QWidget):
 
     def on_finished(self, y: np.ndarray, stems: dict):
         self.prog.setValue(100)
+        # Normalize buffer shape to (frames[,channels]) defensively
+        try:
+            arr = np.asarray(y)
+            if arr.ndim == 2:
+                n0, n1 = arr.shape
+                # If first dim looks like channels (<=8) and second like frames, transpose
+                if n0 <= 8 and n1 > n0:
+                    arr = arr.T
+            y = arr.astype(np.float32, copy=False)
+        except Exception:
+            pass
+
         out_path, _ = QFileDialog.getSaveFileName(self, "Export", filter="Audio (*.wav *.mp3)")
         if out_path:
             if out_path.lower().endswith(".mp3"):
@@ -593,10 +679,19 @@ class MainWindow(QWidget):
                     tmpwav = os.path.join(td, "tmp.wav")
                     sf.write(tmpwav, y, self.sr)
                     try:
-                        subprocess.run([
-                            "ffmpeg", "-y", "-i", tmpwav, "-vn", "-ar", str(self.sr), "-ac", "2", "-b:a", "320k", out_path
-                        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        # Let ffmpeg infer sample rate and channels from the WAV header
+                        cmd = ["ffmpeg", "-y", "-i", tmpwav, "-vn", "-b:a", "320k", out_path]
+                        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        try:
+                            from pathlib import Path
+                            root = Path(__file__).resolve().parents[3]
+                            (root / "work").mkdir(parents=True, exist_ok=True)
+                            with open(root / "work" / "debug.log", "a", encoding="utf-8") as f:
+                                f.write(f"export mp3 ok: {out_path}\n")
+                        except Exception:
+                            pass
                     except Exception:
+                        # Fallback to WAV if ffmpeg fails
                         sf.write(out_path + ".wav", y, self.sr)
             else:
                 sf.write(out_path, y, self.sr)
@@ -663,6 +758,7 @@ class MainWindow(QWidget):
         s.setValue("save_stems", self.cb_save_stems.isChecked())
         s.setValue("per_stem", self.cb_per_stem.isChecked())
         s.setValue("theme", self.cb_theme.currentText())
+        s.setValue("debug_log", self.cb_debug.isChecked())
 
     def restore_settings(self):
         s = self.settings
@@ -716,6 +812,12 @@ class MainWindow(QWidget):
             idx = self.cb_theme.findText(str(theme))
             if idx >= 0:
                 self.cb_theme.setCurrentIndex(idx)
+        dbg = _get("debug_log", None)
+        if dbg is not None:
+            try:
+                self.cb_debug.setChecked(bool(dbg))
+            except Exception:
+                pass
 
     def apply_theme(self, name: str):
         name = (name or "System").lower()
@@ -737,8 +839,8 @@ class MainWindow(QWidget):
             pass
 
     def show_about(self):
-        import sys
-        ver = getattr(sys.modules.get('audio_restorer'), '__version__', '?')
+        import sys as _sys
+        ver = getattr(_sys.modules.get('audio_restorer'), '__version__', '?')
         text = (
             f"<b>Audio Restorer</b><br>Version: {ver}<br><br>"
             "Lizenz: MIT (siehe LICENSE)<br>"

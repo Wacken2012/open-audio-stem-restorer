@@ -34,6 +34,7 @@ Workflow / GUI:
 - PySide6 GUI (progressive Statusmeldungen, abbrechbarer Worker-Thread)
 - Per-Stem Export (optional) in wählbares Verzeichnis
 - Fortschrittsbalken & detailierte Status-Texte
+ - Optionaler Debug-Log (Checkbox „Debug-Log“): schreibt SR/Längen-Infos nach `work/debug.log`
 
 Fallback & Robustheit:
 - Alle optionalen KI-/Pitch-/Loudness-Funktionen haben sichere Fallbacks (kein Absturz bei fehlenden Paketen)
@@ -112,6 +113,8 @@ Hinweis: Große Modelle (Demucs, AudioSR) können beim ersten Start automatisch 
 python run.py
 ```
 
+Optional: Debug-Log aktivieren (GUI → Checkbox „Debug-Log“). Der Log liegt unter `work/debug.log` und enthält u.a. Sample-Rate- und Längenangaben, hilfreich für Fehleranalysen (z.B. Tempo-/Längenprobleme).
+
 ## Nutzungshinweise
 1. Audio laden
 2. Backend & Stems wählen
@@ -127,6 +130,7 @@ python run.py
 - `src/audio_restorer/gui/` – GUI (PySide6)
 - `src/audio_restorer/separation/` – Backend-Registry & Implementierungen (HPSS, Hooks für Demucs/Open-Unmix/Spleeter)
 - `src/audio_restorer/restoration/` – DSP & Enhancement Funktionen (Denoise, Declick, EQ, Loudness, Clarity, Wow/Flutter, Generativ)
+ - `scripts/test_length_invariance.py` – Längeninvarianz-Schnelltest
 
 ## Bekannte Grenzen
 - Kein destruktives Speichern – immer neuer Export
@@ -146,23 +150,60 @@ python run.py
 MIT (siehe `LICENSE`). Drittanbieter-Lizenzen: `THIRD_PARTY_LICENSES.md`.
 
 ## Distribution / AppImage
-Ein AppImage inkl. Python-Abhängigkeiten lässt sich mit dem bereitgestellten Skript bauen. Optional können auch DL‑Pakete (Demucs/Open‑Unmix/AudioSR/torchcrepe) eingebunden werden.
+Das Skript `scripts/build_appimage.sh` erzeugt ein AppImage. Es kann (a) ein leichtes AppImage mit System‑Python oder (b) ein vollständig offline lauffähiges AppImage mit gebündeltem Python‑Runtime, allen Paketen und vorab heruntergeladenen ML‑Modellen bauen.
 
 Schnellstart (Linux):
 ```bash
 # optional: Abhängigkeiten für Builder
 # sudo apt-get install -y imagemagick
 
+# 1) Basis-AppImage (ohne schwere ML-Extras)
 bash scripts/build_appimage.sh
+
+# 2) Vollständig offline AppImage (inkl. Python-Runtime & ML-Extras)
+#    - Bundelt eine virtuelle Python-Umgebung in AppDir/usr/python
+#    - Installiert Torch (CPU), Torchaudio, Demucs, Open-Unmix, TorchCrepe, pyloudnorm
+#    - Lädt Modellgewichte vor und legt sie in AppDir/usr/models bzw. AppDir/usr/cache ab
+INCLUDE_EXTRAS=1 PREWARM=1 bash scripts/build_appimage.sh
+
+# Optional: ffmpeg ins AppImage bündeln (achten Sie auf Lizenzkompatibilität)
+# Variante A: systemweites ffmpeg verwenden
+BUNDLE_FFMPEG=1 bash scripts/build_appimage.sh
+# Variante B: expliziten Pfad angeben
+FFMPEG_PATH=/opt/ffmpeg/bin/ffmpeg BUNDLE_FFMPEG=1 bash scripts/build_appimage.sh
 ```
 
-Das Skript:
+Weitere Schalter:
+- `INCLUDE_DEMUCS=1` (implizit bei `INCLUDE_EXTRAS=1`) – Demucs installieren und Modelle vorladen
+- `INCLUDE_OPENUNMIX=1` (implizit bei `INCLUDE_EXTRAS=1`) – Open‑Unmix installieren/vorwärmen
+- `INCLUDE_TORCHCREPE=1` (implizit bei `INCLUDE_EXTRAS=1`) – TorchCrepe installieren/vorwärmen
+- `INCLUDE_SPLEETER=1` – Spleeter (TensorFlow‑basiert, sehr groß) zusätzlich einbinden
+- `INCLUDE_AUDIOSR=1` – AudioSR (sehr groß/langsam ohne GPU) zusätzlich einbinden
+- `TORCH_VERSION` / `TORCHAUDIO_VERSION` – exakte Torch/Torchaudio Versionen für CPU‑Wheels setzen (Default: 2.3.1)
+
+Was das Skript tut:
 - erstellt eine isolierte Build‑Venv,
-- installiert Basis‑ und optional gewünschte Pakete,
-- kopiert Site‑Packages und Projektcode nach `AppDir/usr`,
+- installiert Basis‑ und optionale Pakete (Torch CPU‑Wheels via `download.pytorch.org`),
+- bündelt die komplette Venv als Laufzeit nach `AppDir/usr/python`,
+- lädt (optional) ML‑Modelle vor und speichert sie unter `AppDir/usr/models`/`AppDir/usr/cache`,
 - legt Desktop‑Datei, Icon und Wrapper an,
 - packt mit `appimagetool` (falls vorhanden) zum AppImage.
 
-Das fertige Artefakt liegt als `dist/AudioRestorer-<version>-<arch>.AppImage` vor. Falls `appimagetool` fehlt, erzeugt das Skript ein gebrauchsfertiges `AppDir/` und gibt Hinweise zum Nachinstallieren.
+Laufzeit: Der Starter setzt `TORCH_HOME` und `XDG_CACHE_HOME` auf die gebündelten Ordner, sodass beim ersten Start keine Internetverbindung nötig ist. Das AppImage bevorzugt außerdem gebündelte Tools (z.B. `ffmpeg`, wenn eingeschlossen).
 
-Lizenzhinweise: PySide6/Qt wird dynamisch verwendet (LGPLv3). Bitte legen Sie bei Distribution `LICENSE`, `THIRD_PARTY_LICENSES.md` sowie relevante Upstream‑Lizenztexte bei und beachten Sie ggf. ffmpeg‑Lizenzbedingungen (je nach Build LGPL/GPL).
+Artefakt: `dist/AudioRestorer-<version>-<arch>.AppImage`. Falls `appimagetool` fehlt, bleibt ein gebrauchsfertiges `AppDir/` zurück.
+
+Größe & CPU‑Support:
+- Mit Extras und vorab geladenen Modellen kann das AppImage mehrere hundert MB groß werden.
+- Torch wird als CPU‑Build eingebunden. GPU‑Beschleunigung ist in diesem Artefakt nicht enthalten.
+
+Lizenzhinweise: PySide6/Qt wird dynamisch verwendet (LGPLv3). Bitte legen Sie bei Distribution `LICENSE`, `THIRD_PARTY_LICENSES.md` sowie relevante Upstream‑Lizenztexte bei. Für ffmpeg gilt: je nach Build ist LGPL oder GPL maßgeblich. Wenn Sie ffmpeg bündeln (BUNDLE_FFMPEG=1), stellen Sie sicher, dass der verwendete Build zur gewünschten Weitergabe passt (für LGPL: ohne GPL‑only Komponenten). Das Skript legt dafür eine `usr/licenses/NOTICE-FFMPEG.txt` im AppDir an; ergänzen Sie ggf. die vollständigen Lizenztexte.
+
+## Tests / Qualitätssicherung
+Schneller Längeninvarianz-Test (stellt sicher, dass Export/Verarbeitung die Länge nicht verändert):
+
+```bash
+python scripts/test_length_invariance.py
+```
+
+Das Skript generiert synthetisches Audio für mehrere Sample-Raten und Laufzeiten, nutzt verfügbare Backends (HPSS, optional Demucs/Open‑Unmix) und prüft, dass die Pipeline-Ausgabe dieselbe Länge wie der Eingang besitzt – sowohl im Mono‑ als auch im Stereo‑Fall (mit Widening). Bei fehlenden optionalen Paketen werden entsprechende Backends übersprungen.

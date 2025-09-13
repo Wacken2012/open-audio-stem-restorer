@@ -24,7 +24,7 @@ Hinweis zu PySide6 / Qt: Nutzung unter den Bedingungen der LGPLv3 (dynamisches L
 
 Weitergabe-Hinweise:
 - Legen Sie `LICENSE` und diese Datei bei.
-- Falls `ffmpeg` mitgeliefert wird: dessen Lizenz beachten (LGPL/GPL je nach Build-Optionen).
-- Falls Torch/Demucs/AudioSR/torchcrepe gebündelt werden: jeweilige Lizenzen der Wheels/Modelle mitliefern.
+- Falls `ffmpeg` mitgeliefert wird (Option `BUNDLE_FFMPEG=1` im Build-Skript): dessen Lizenz beachten (LGPL/GPL je nach Build-Optionen). Für LGPL-Verteilung ffmpeg ohne GPL-only Komponenten wählen. Fügen Sie die upstream Copyright/Lizenztexte bei.
+- Falls Torch/Demucs/AudioSR/torchcrepe gebündelt werden (`INCLUDE_EXTRAS=1`): jeweilige Lizenzen der Wheels/Modelle beilegen. Vorsicht: Gewichte/Modelle können gesonderten Nutzungsbedingungen unterliegen.
 
 Dieses Projekt selbst steht unter MIT (siehe `LICENSE`). Bei Distribution zusammen mit optionalen Modellen/Binaries müssen deren Lizenzen beigelegt werden.

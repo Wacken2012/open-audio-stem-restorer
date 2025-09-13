@@ -12,6 +12,20 @@ except Exception:
 # Optional: generative audio super-resolution (AudioSR)
 _AUDIOSR_MODEL = None
 
+def _hz_cap(f_hz: float, sr: int, frac_nyq: float = 0.49) -> float:
+    """Clamp frequency to a safe range below Nyquist for scipy iirfilter with fs=sr."""
+    lo = 1.0
+    hi = max(lo + 1.0, float(frac_nyq * sr))
+    return float(min(max(lo, f_hz), hi))
+
+
+def _hz_cap(freq: float, sr: int, min_hz: float = 1.0, max_ratio: float = 0.49) -> float:
+    """Clamp frequency in Hz to a safe digital range (0 < Wn < sr/2).
+
+    max_ratio defaults to 0.49 to leave margin below Nyquist.
+    """
+    return float(max(min_hz, min(freq, max_ratio * float(sr))))
+
 def _resample_poly_safe(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     if sr_in == sr_out:
         return x.astype(np.float32)
@@ -56,7 +70,8 @@ def _audiosr_super_resolve(x: np.ndarray, sr: int, target_sr: int = 48000) -> np
 
 def _highpass(x: np.ndarray, sr: int, fc: float = 7000.0) -> np.ndarray:
     try:
-        sos = sps.iirfilter(4, Wn=fc, btype='highpass', ftype='butter', fs=sr, output='sos')
+        fc_safe = _hz_cap(fc, sr)
+        sos = sps.iirfilter(4, Wn=fc_safe, btype='highpass', ftype='butter', fs=sr, output='sos')
         return sps.sosfiltfilt(sos, x.astype(np.float32)).astype(np.float32)
     except Exception:
         return x.astype(np.float32)
@@ -188,6 +203,7 @@ def decrackle_band_suppressor(x: np.ndarray, sr: int, strength: float = 0.0) -> 
 
     # High-pass emphasize crackle region; adapt cutoff with strength
     cutoff = 3000.0 + 4000.0 * s
+    cutoff = _hz_cap(cutoff, sr)
     try:
         sos_hp = sps.iirfilter(3, Wn=cutoff, btype='highpass', ftype='butter', fs=sr, output='sos')
         high = sps.sosfiltfilt(sos_hp, x.astype(np.float32))
@@ -234,22 +250,30 @@ def eq_preset(x: np.ndarray, sr: int, preset: str = "shellac") -> np.ndarray:
     # Practical EQ presets; 'none' is passthrough
     if preset == "shellac":
         # Gentle HF roll-off (LPF ~5 kHz) to tame crackle but keep some air
-        lpf_cut = min(9000.0, max(3500.0, 5000.0))
+        lpf_cut = _hz_cap(min(9000.0, max(3500.0, 5000.0)), sr)
         sos_lpf = sps.iirfilter(2, Wn=lpf_cut, btype='lowpass', ftype='butter', fs=sr, output='sos')
         y = sps.sosfiltfilt(sos_lpf, x)
         # Bass lift via low-shelf approximation (blend of lowpassed bass)
-        sos_bass = sps.iirfilter(2, Wn=120, btype='lowpass', ftype='butter', fs=sr, output='sos')
+        sos_bass = sps.iirfilter(2, Wn=_hz_cap(120, sr), btype='lowpass', ftype='butter', fs=sr, output='sos')
         bass = sps.sosfiltfilt(sos_bass, x)
         y = 0.75 * y + 0.25 * bass
         # Presence region bump (~2.5–4.5 kHz) for clarity on vocals/instruments
-        sos_pres = sps.iirfilter(2, Wn=[2500, 4500], btype='bandpass', ftype='butter', fs=sr, output='sos')
+        bp_lo = _hz_cap(2500, sr)
+        bp_hi = _hz_cap(4500, sr)
+        if bp_hi <= bp_lo:
+            bp_hi = min(_hz_cap(4800, sr), bp_lo + 10.0)
+        sos_pres = sps.iirfilter(2, Wn=[bp_lo, bp_hi], btype='bandpass', ftype='butter', fs=sr, output='sos')
         pres = sps.sosfiltfilt(sos_pres, x)
         y = y + 0.15 * pres
     elif preset == "tape":
         # Mild hiss reduction (LPF ~12k) and stronger presence boost (~3k)
-        sos = sps.iirfilter(2, Wn=12000, btype='lowpass', ftype='butter', fs=sr, output='sos')
+        sos = sps.iirfilter(2, Wn=_hz_cap(12000, sr), btype='lowpass', ftype='butter', fs=sr, output='sos')
         y = sps.sosfiltfilt(sos, x)
-        sos_bp = sps.iirfilter(2, Wn=[2500, 5000], btype='bandpass', ftype='butter', fs=sr, output='sos')
+        bp_lo = _hz_cap(2500, sr)
+        bp_hi = _hz_cap(5000, sr)
+        if bp_hi <= bp_lo:
+            bp_hi = min(_hz_cap(5200, sr), bp_lo + 10.0)
+        sos_bp = sps.iirfilter(2, Wn=[bp_lo, bp_hi], btype='bandpass', ftype='butter', fs=sr, output='sos')
         pres = sps.sosfiltfilt(sos_bp, x)
         y = y + 0.25 * pres
     else:
@@ -270,6 +294,7 @@ def air_enhance(x: np.ndarray, sr: int, strength: float = 0.0) -> np.ndarray:
     # High-shelf via peaking approximation: mix of original and highpassed
     # Choose cutoff ~4–8 kHz depending on strength
     cutoff = float(min(12000.0, max(3500.0, 4500.0 + 3500.0 * s)))
+    cutoff = _hz_cap(cutoff, sr)
     sos_hp = sps.iirfilter(2, Wn=cutoff, btype='highpass', ftype='butter', fs=sr, output='sos')
     high = sps.sosfiltfilt(sos_hp, x)
 
@@ -297,7 +322,7 @@ def transient_enhance(x: np.ndarray, sr: int, strength: float = 0.0) -> np.ndarr
         return x.astype(np.float32)
     x = x.astype(np.float32)
     # HF band
-    sos_hp = sps.iirfilter(2, Wn=1000.0, btype='highpass', ftype='butter', fs=sr, output='sos')
+    sos_hp = sps.iirfilter(2, Wn=_hz_cap(1000.0, sr), btype='highpass', ftype='butter', fs=sr, output='sos')
     hf = sps.sosfiltfilt(sos_hp, x)
     # Attack envelope
     smooth = sps.sosfiltfilt(sps.iirfilter(1, Wn=15.0, btype='lowpass', ftype='butter', fs=sr, output='sos'), np.abs(x))
@@ -346,7 +371,7 @@ def codec_artifact_suppressor(x: np.ndarray, sr: int, strength: float = 0.0) -> 
     _, y = sps.istft(Z2, fs=sr, nperseg=nper, noverlap=nover, boundary=None)
     y = y[:len(x)].astype(np.float32)
     # Small de-ringing LPF
-    sos = sps.iirfilter(2, Wn=min(0.48 * (sr/2), 18000.0), btype='lowpass', ftype='butter', fs=sr, output='sos')
+    sos = sps.iirfilter(2, Wn=_hz_cap(min(0.48 * (sr/2), 18000.0), sr), btype='lowpass', ftype='butter', fs=sr, output='sos')
     y = sps.sosfiltfilt(sos, y).astype(np.float32)
     # Normalize
     peak = float(np.max(np.abs(y)) + 1e-9)
@@ -463,7 +488,11 @@ def clarity_stabilization(x: np.ndarray, sr: int, strength: float = 0.0) -> np.n
     if s <= 1e-3:
         return x.astype(np.float32)
     # HF envelope 3–8 kHz
-    sos_bp = sps.iirfilter(2, Wn=[3000.0, 8000.0], btype='bandpass', ftype='butter', fs=sr, output='sos')
+    hi = _hz_cap(8000.0, sr)
+    lo = _hz_cap(3000.0, sr)
+    if hi <= lo:
+        hi = min(_hz_cap(0.49 * sr, sr), lo + 10.0)
+    sos_bp = sps.iirfilter(2, Wn=[lo, hi], btype='bandpass', ftype='butter', fs=sr, output='sos')
     hf = sps.sosfiltfilt(sos_bp, x)
     env = np.sqrt(sps.convolve(hf**2, np.ones(int(0.1*sr))/(0.1*sr), mode='same') + 1e-12)
     # Normalize envelope to ~0..1
@@ -531,15 +560,18 @@ def wow_flutter_reduce(x: np.ndarray, sr: int, strength: float = 0.0, engine: st
             inst_freq = np.concatenate([[inst_freq[0]], inst_freq])
 
         # Smooth with low-pass (cutoff ~5 Hz)
-        sos_lp = sps.iirfilter(2, Wn=5.0, btype='lowpass', ftype='butter', fs=sr, output='sos')
+        sos_lp = sps.iirfilter(2, Wn=_hz_cap(5.0, sr), btype='lowpass', ftype='butter', fs=sr, output='sos')
         smooth_freq = sps.sosfiltfilt(sos_lp, inst_freq)
         # Blend towards smoothed freq using strength
         target_freq = (1.0 - s) * inst_freq + s * smooth_freq
-        # Reconstruct time mapping by integrating target freq
+        # Reconstruct a monotonic time mapping by integrating target freq
         target_phase = np.cumsum(target_freq) * (2*np.pi/sr)
-        # Resample original x onto new, less-wobbly phase timeline via linear interp
+        # Normalize mapping to exactly cover the original duration [0, N-1]
         t = np.arange(len(x))
-        target_t = (target_phase - target_phase[0]) / (2*np.pi) * (sr / np.mean(target_freq))
+        target_t = target_phase - target_phase[0]
+        target_t = target_t - np.min(target_t)
+        denom = float(np.max(target_t) + 1e-9)
+        target_t = target_t / denom * (len(x) - 1)
         target_t = np.clip(target_t, 0, len(x)-1)
         y = np.interp(t, target_t, x).astype(np.float32)
         # Final blend to avoid artifacts
