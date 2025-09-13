@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Environments
+.venv/
+.build-venv/
+
+# VS Code
+.vscode/
+
+# AppImage outputs
+AppDir/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db

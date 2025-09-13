@@ -1,0 +1,6 @@
+PySide6>=6.7
+numpy>=1.24
+scipy>=1.11
+librosa>=0.10.1
+soundfile>=0.12
+noisereduce>=3.0.0

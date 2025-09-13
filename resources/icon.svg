@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3c72"/>
+      <stop offset="100%" stop-color="#2a5298"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.05"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="32" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <circle cx="128" cy="128" r="78" fill="#0d1320" stroke="#4fc3f7" stroke-width="4"/>
+    <path d="M64 128c24-48 48-48 72 0s48 48 72 0" fill="none" stroke="#90caf9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M88 128c16-32 32-32 48 0s32 32 48 0" fill="none" stroke="#29b6f6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="128" cy="128" r="10" fill="#29b6f6" stroke="#e1f5fe" stroke-width="3"/>
+  </g>
+  <rect x="0" y="0" width="256" height="256" rx="32" fill="url(#glow)" style="mix-blend-mode:overlay"/>
+  <text x="128" y="226" text-anchor="middle" font-family="'DejaVu Sans', Arial, sans-serif" font-size="28" fill="#ffffff" opacity="0.9">AR</text>
+</svg>
